@@ -78,6 +78,7 @@ def get_live_prices(tickers: list[str]) -> dict:
         return {t: round(float(latest.get(t, np.nan)), 2) for t in tickers}
     return {t: None for t in tickers}
 
+live_prices = get_live_prices(tuple(STOCK_TICKERS + BOND_TICKERS))
 
 # ══════════════════════════════════════════════
 # 포트폴리오 평가 계산
