@@ -187,6 +187,17 @@ def compute_portfolio(holdings, prices):
     df["actual_weight_pct"] = np.where(total > 0, df["market_value_usd"] / total * 100, 0.0)
     return df.set_index("ticker")
 
+strat       = run_strategy()        
+dv01_result = get_dv01(tuple(BOND_TICKERS))
+port        = strat["port"]
+bm          = strat["benchmark"]
+ow          = strat["optimal_weights"].set_index("regime")
+
+portfolio  = compute_portfolio(edited_df, live_prices)
+total_usd  = portfolio["market_value_usd"].sum()
+total_pnl  = portfolio["unrealized_pnl_usd"].sum()
+
+
 # ══════════════════════════════════════════════
 # 탭
 # ══════════════════════════════════════════════
