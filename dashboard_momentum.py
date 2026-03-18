@@ -71,12 +71,18 @@ with st.sidebar:
 # 실시간 가격 조회 (yfinance, 5분 캐시)
 # ══════════════════════════════════════════════
 @st.cache_data(ttl=300)
-def get_live_prices(tickers: list[str]) -> dict:
-    data = yf.download(tickers, period="1d", interval="1m", progress=False)
-    if isinstance(data, pd.DataFrame) and "Close" in data:
-        latest = data["Close"].iloc[-1]
-        return {t: round(float(latest.get(t, np.nan)), 2) for t in tickers}
-    return {t: None for t in tickers}
+def get_live_prices(tickers: list) -> dict:
+    result = {}
+    for t in tickers:
+        try:
+            df = yf.download(t, period="5d", interval="1d", progress=False, auto_adjust=True)
+            if not df.empty:
+                result[t] = round(float(df["Close"].dropna().iloc[-1]), 2)
+            else:
+                result[t] = None
+        except Exception:
+            result[t] = None
+    return result
 
 live_prices = get_live_prices(tuple(STOCK_TICKERS + BOND_TICKERS))
 # nan 제거 또는 0으로 대체
