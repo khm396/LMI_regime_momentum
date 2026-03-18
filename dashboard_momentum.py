@@ -65,12 +65,6 @@ with st.sidebar:
         "📅 최근 리밸런싱 날짜",
         value=datetime.today()
     )
-    total_krw_input = st.number_input(
-        "💰 총 운용자산 (KRW)",
-        value=100_000_000,
-        step=10_000_000,
-        format="%d"
-    )
 
 
 # ══════════════════════════════════════════════
@@ -84,40 +78,28 @@ def get_live_prices(tickers: list[str]) -> dict:
         return {t: round(float(latest.get(t, np.nan)), 2) for t in tickers}
     return {t: None for t in tickers}
 
-@st.cache_data(ttl=300)
-def get_usdkrw() -> float:
-    ticker = yf.Ticker("KRWX=X")
-    hist = ticker.history(period="1d")
-    return float(hist["Close"].iloc[-1]) if not hist.empty else 1350.0
-
-all_tickers = edited_df["ticker"].tolist()
-live_prices = get_live_prices(all_tickers)
-usdkrw = get_usdkrw()
-
 
 # ══════════════════════════════════════════════
 # 포트폴리오 평가 계산
 # ══════════════════════════════════════════════
-def compute_portfolio(holdings: pd.DataFrame, prices: dict, krw_rate: float) -> pd.DataFrame:
+# krw_rate 파라미터 제거
+def compute_portfolio(holdings, prices):
     df = holdings.copy()
-    df["current_price_usd"] = df["ticker"].map(prices)
-    df["market_value_usd"]  = df["shares"] * df["current_price_usd"]
-    df["market_value_krw"]  = df["market_value_usd"] * krw_rate
-    df["cost_basis_usd"]    = df["shares"] * df["avg_cost_usd"]
-    df["unrealized_pnl_usd"]= df["market_value_usd"] - df["cost_basis_usd"]
-    df["unrealized_pnl_pct"]= np.where(
+    df["current_price_usd"]  = df["ticker"].map(prices)
+    df["market_value_usd"]   = df["shares"] * df["current_price_usd"]
+    df["cost_basis_usd"]     = df["shares"] * df["avg_cost_usd"]
+    df["unrealized_pnl_usd"] = df["market_value_usd"] - df["cost_basis_usd"]
+    df["unrealized_pnl_pct"] = np.where(
         df["cost_basis_usd"] > 0,
-        (df["unrealized_pnl_usd"] / df["cost_basis_usd"]) * 100,
-        0.0
+        df["unrealized_pnl_usd"] / df["cost_basis_usd"] * 100, 0.0
     )
     total = df["market_value_usd"].sum()
     df["actual_weight_pct"] = np.where(total > 0, df["market_value_usd"] / total * 100, 0.0)
     return df.set_index("ticker")
 
-portfolio = compute_portfolio(edited_df, live_prices, usdkrw)
-total_usd = portfolio["market_value_usd"].sum()
-total_krw = portfolio["market_value_krw"].sum()
-total_pnl = portfolio["unrealized_pnl_usd"].sum()
+# 호출부도 수정
+portfolio = compute_portfolio(edited_df, live_prices)
+
 
 # ══════════════════════════════════════════════
 # 전략 계산 (30분 캐시)
@@ -243,12 +225,11 @@ tab1, tab2, tab3 = st.tabs(["🏠 운용현황", "📈 벤치마크 트래킹", 
 # ── TAB 1 ──────────────────────────────────────
 with tab1:
     regime = strat["current_regime"]
-    c1,c2,c3,c4,c5 = st.columns(5)
+    c1, c2, c3, c4 = st.columns(4)   # 5→4로 줄이기
     c1.metric("현재 레짐", regime)
-    c2.metric("총 평가금액 (KRW)", f"₩{total_krw:,.0f}")
-    c3.metric("총 평가금액 (USD)", f"${total_usd:,.0f}")
-    c4.metric("미실현 손익 (USD)", f"${total_pnl:+,.0f}")
-    c5.metric("USD/KRW", f"{usdkrw:,.2f}")
+    c2.metric("총 평가금액 (USD)", f"${total_usd:,.0f}")
+    c3.metric("미실현 손익 (USD)", f"${total_pnl:+,.0f}")
+    c4.metric("리밸런싱", str(rebal_date))
     st.caption(f"📅 최근 리밸런싱: {rebal_date}  |  가격 기준: 실시간 (5분 캐시)")
     st.divider()
 
