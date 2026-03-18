@@ -213,7 +213,7 @@ port        = strat["port"]
 bm          = strat["benchmark"]
 ow          = strat["optimal_weights"].set_index("regime")
 
-portfolio  = compute_portfolio(edited_df, live_prices, usdkrw)
+portfolio  = compute_portfolio(edited_df, live_prices)
 total_usd  = portfolio["market_value_usd"].sum()
 total_krw  = portfolio["market_value_krw"].sum()
 total_pnl  = portfolio["unrealized_pnl_usd"].sum()
