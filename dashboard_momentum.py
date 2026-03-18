@@ -252,19 +252,24 @@ with tab1:
 # ── TAB 2 ──────────────────────────────────────
 with tab2:
     st.subheader("📈 누적수익률: 전략 vs SPY/AGG 60/40")
-    in_s  = port.loc[:strat["split_date"], "cumulative_return"]
-    out_s = port.loc[strat["oos_start"]:,  "cumulative_return"]
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=in_s.index,  y=in_s*100,  name="전략 (In-Sample)",     line=dict(color="#1f77b4", width=2)))
-    fig.add_trace(go.Scatter(x=out_s.index, y=out_s*100, name="전략 (Out-of-Sample)", line=dict(color="#1f77b4", width=2, dash="dash")))
-    fig.add_trace(go.Scatter(x=bm.index,    y=bm*100,    name="SPY/AGG 60/40",        line=dict(color="#ff7f0e", width=2)))
-    fig.add_vline(x=pd.Timestamp(strat["split_date"]).timestamp() * 1000,
-    line_dash="dot", line_color="gray", annotation_text="OOS 시작")
-    fig.update_layout(yaxis_title="누적수익률 (%)", height=500, hovermode="x unified",
-                      legend=dict(orientation="h", y=1.02))
+    fig.add_trace(go.Scatter(
+        x=port.index, y=port["cumulative_return"]*100,
+        name="LMI 전략", line=dict(color="#1f77b4", width=2)
+    ))
+    fig.add_trace(go.Scatter(
+        x=bm.index, y=bm*100,
+        name="SPY/AGG 60/40", line=dict(color="#ff7f0e", width=2)
+    ))
+    fig.update_layout(
+        yaxis_title="누적수익률 (%)", height=500,
+        hovermode="x unified",
+        legend=dict(orientation="h", y=1.02)
+    )
     st.plotly_chart(fig, use_container_width=True)
 
+    # 성과 테이블도 단순하게
     def perf_row(series, label):
         years = len(series) / 12
         cagr  = (1 + series).prod() ** (1/years) - 1
@@ -276,12 +281,11 @@ with tab2:
 
     bench_ret = bm.diff().dropna()
     rows = [
-        perf_row(port.loc[:strat["split_date"], "strategy_return"].dropna(), "전략 In-Sample"),
-        perf_row(port.loc[strat["oos_start"]:,  "strategy_return"].dropna(), "전략 Out-of-Sample"),
-        perf_row(bench_ret.loc[:strat["split_date"]].dropna(), "60/40 In-Sample"),
-        perf_row(bench_ret.loc[strat["oos_start"]:].dropna(),  "60/40 Out-of-Sample"),
+        perf_row(port["strategy_return"].dropna(), "LMI 전략 (전체)"),
+        perf_row(bench_ret.dropna(), "SPY/AGG 60/40 (전체)"),
     ]
     st.dataframe(pd.DataFrame(rows).set_index(""), use_container_width=True)
+
 
 # ── TAB 3 ──────────────────────────────────────
 with tab3:
