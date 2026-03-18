@@ -79,15 +79,17 @@ def get_live_prices(tickers: list[str]) -> dict:
     return {t: None for t in tickers}
 
 live_prices = get_live_prices(tuple(STOCK_TICKERS + BOND_TICKERS))
+# nan 제거 또는 0으로 대체
+live_prices = {k: v for k, v in live_prices.items() if v == v}  # nan 제거
+
 
 # ══════════════════════════════════════════════
 # 포트폴리오 평가 계산
 # ══════════════════════════════════════════════
-# krw_rate 파라미터 제거
 def compute_portfolio(holdings, prices):
     df = holdings.copy()
     df["current_price_usd"]  = df["ticker"].map(prices)
-    df["market_value_usd"]   = df["shares"] * df["current_price_usd"]
+    df["market_value_usd"]   = df["shares"] * df["current_price_usd"].fillna(0)
     df["cost_basis_usd"]     = df["shares"] * df["avg_cost_usd"]
     df["unrealized_pnl_usd"] = df["market_value_usd"] - df["cost_basis_usd"]
     df["unrealized_pnl_pct"] = np.where(
@@ -95,7 +97,9 @@ def compute_portfolio(holdings, prices):
         df["unrealized_pnl_usd"] / df["cost_basis_usd"] * 100, 0.0
     )
     total = df["market_value_usd"].sum()
-    df["actual_weight_pct"] = np.where(total > 0, df["market_value_usd"] / total * 100, 0.0)
+    df["actual_weight_pct"] = np.where(
+        total > 0, df["market_value_usd"] / total * 100, 0.0
+    )
     return df.set_index("ticker")
 
 # 호출부도 수정
@@ -192,11 +196,10 @@ def get_dv01(bond_tickers: tuple):
 # ══════════════════════════════════════════════
 # 포트폴리오 평가 계산
 # ══════════════════════════════════════════════
-def compute_portfolio(holdings, prices, krw_rate):
+def compute_portfolio(holdings, prices):
     df = holdings.copy()
     df["current_price_usd"]  = df["ticker"].map(prices)
     df["market_value_usd"]   = df["shares"] * df["current_price_usd"]
-    df["market_value_krw"]   = df["market_value_usd"] * krw_rate
     df["cost_basis_usd"]     = df["shares"] * df["avg_cost_usd"]
     df["unrealized_pnl_usd"] = df["market_value_usd"] - df["cost_basis_usd"]
     df["unrealized_pnl_pct"] = np.where(
@@ -215,7 +218,6 @@ ow          = strat["optimal_weights"].set_index("regime")
 
 portfolio  = compute_portfolio(edited_df, live_prices)
 total_usd  = portfolio["market_value_usd"].sum()
-total_krw  = portfolio["market_value_krw"].sum()
 total_pnl  = portfolio["unrealized_pnl_usd"].sum()
 
 # ══════════════════════════════════════════════
@@ -237,16 +239,16 @@ with tab1:
     st.subheader("📋 현재 포트폴리오 상세")
     disp = portfolio[[
         "asset_class","shares","avg_cost_usd","current_price_usd",
-        "market_value_usd","market_value_krw",
+        "market_value_usd",
         "unrealized_pnl_usd","unrealized_pnl_pct","actual_weight_pct"
     ]].copy()
     disp.columns = ["구분","수량","평균단가","현재가","평가금액(USD)",
-                    "평가금액(KRW)","미실현손익(USD)","손익률(%)","실제비중(%)"]
+                    "미실현손익(USD)","손익률(%)","실제비중(%)"]
     disp = disp[disp["수량"] > 0]
     st.dataframe(
         disp.style.format({
             "수량":"{:.2f}", "평균단가":"${:.2f}", "현재가":"${:.2f}",
-            "평가금액(USD)":"${:,.0f}", "평가금액(KRW)":"₩{:,.0f}",
+            "평가금액(USD)":"${:,.0f}"
             "미실현손익(USD)":"${:+,.0f}", "손익률(%)":"{:+.2f}%", "실제비중(%)":"{:.1f}%"
         }),
         use_container_width=True, height=450
