@@ -353,7 +353,6 @@ with tab1:
 with tab2:
     st.subheader("누적수익률: 전략 vs SPY/AGG 60/40 vs 실제 포트폴리오")
 
-    # perf_row 정의를 맨 위로
     def perf_row(series, label):
         years = len(series) / 12
         cagr  = (1 + series).prod() ** (1/years) - 1
@@ -366,62 +365,114 @@ with tab2:
     bench_ret    = bm.diff().dropna()
     recent_start = "2025-09-01"
 
+    # ── 역사적 가격 조회 ──────────────────────────
+    @st.cache_data(ttl=3600)
+    def get_historical_prices(tickers: tuple, start: str) -> pd.DataFrame:
+        df = yf.download(list(tickers), start=start, progress=False, auto_adjust=True)
+        if isinstance(df.columns, pd.MultiIndex):
+            df = df["Close"]
+        return df.ffill()
+
     if not trade_history.empty:
-        def calculate_portfolio_value(trades_df, live_prices_dict, current_date):
-            holdings   = {}
-            cost_basis = 0
-            for _, trade in trades_df[trades_df['date'] <= current_date].iterrows():
-                ticker = trade['ticker']
-                if ticker not in holdings:
-                    holdings[ticker] = 0
-                if trade['action'] == 'BUY':
-                    holdings[ticker] += trade['shares']
-                    cost_basis       += trade['shares'] * trade['price_usd']
-                else:
-                    holdings[ticker] -= trade['shares']
-                    cost_basis       -= trade['shares'] * trade['price_usd']
-            market_value = sum(
-                holdings[t] * live_prices_dict.get(t, 0)
-                for t in holdings if holdings[t] > 0
-            )
-            return market_value, cost_basis
+        all_tickers = tuple(trade_history['ticker'].unique())
+        hist_prices = get_historical_prices(
+            all_tickers,
+            trade_history['date'].min().strftime("%Y-%m-%d")
+        )
 
-        date_range       = pd.date_range(start=trade_history['date'].min(), end=datetime.today(), freq='D')
-        portfolio_values = []
-        portfolio_costs  = []
-        for date in date_range:
-            mkt_val, cost = calculate_portfolio_value(trade_history, live_prices, date)
-            portfolio_values.append(mkt_val)
-            portfolio_costs.append(cost)
+        # 날짜별 보유수량 시계열 계산
+        date_range = pd.date_range(trade_history['date'].min(), datetime.today(), freq='D')
+        holdings_ts = {}
+        for ticker in all_tickers:
+            trades_t = trade_history[trade_history['ticker'] == ticker]
+            qty = 0
+            daily_qty = {}
+            for date in date_range:
+                day_trades = trades_t[trades_t['date'].dt.date == date.date()]
+                for _, t in day_trades.iterrows():
+                    qty += t['shares'] if t['action'] == 'BUY' else -t['shares']
+                daily_qty[date] = qty
+            holdings_ts[ticker] = pd.Series(daily_qty)
 
-        portfolio_series = pd.Series(portfolio_values, index=date_range)
-        cost_series      = pd.Series(portfolio_costs,  index=date_range)
-        actual_pnl       = portfolio_series - cost_series
-        actual_cumret    = np.where(cost_series > 0, actual_pnl / cost_series * 100, 0)
+        holdings_df_ts = pd.DataFrame(holdings_ts).fillna(0)
+
+        # 날짜별 시장가치 = 보유수량 × 당일 가격
+        aligned_prices = hist_prices.reindex(date_range, method='ffill').fillna(0)
+        portfolio_series = (holdings_df_ts * aligned_prices).sum(axis=1)
+
+        # 누적 cost basis
+        cost_series = pd.Series(0.0, index=date_range)
+        for _, trade in trade_history.iterrows():
+            amount = trade['shares'] * trade['price_usd']
+            if trade['action'] == 'BUY':
+                cost_series.loc[trade['date']:] += amount
+            else:
+                cost_series.loc[trade['date']:] -= amount
+
+        actual_pnl        = portfolio_series - cost_series
+        actual_cumret     = np.where(cost_series > 0, actual_pnl / cost_series * 100, 0)
         actual_ret_series = (actual_pnl / cost_series).fillna(0).replace([np.inf, -np.inf], 0)
+        actual_cumret_series = pd.Series(actual_cumret, index=date_range)
 
+        # ── 차트 1: 전략 vs 벤치마크 ──────────
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=port.index,  y=port["cumulative_return"]*100,
-                                 name="LMI 전략",       line=dict(color="#1f77b4", width=2)))
-        fig.add_trace(go.Scatter(x=bm.index,    y=bm*100,
-                                 name="SPY/AGG 60/40",  line=dict(color="#ff7f0e", width=2)))
+        fig.add_trace(go.Scatter(x=port.index, y=port["cumulative_return"]*100,
+                                 name="LMI 전략", line=dict(color="#1f77b4", width=2)))
+        fig.add_trace(go.Scatter(x=bm.index, y=bm*100,
+                                 name="SPY/AGG 60/40", line=dict(color="#ff7f0e", width=2)))
         fig.update_layout(yaxis_title="누적수익률 (%)", height=500,
                           hovermode="x unified", legend=dict(orientation="h", y=1.02))
         st.plotly_chart(fig, use_container_width=True)
 
+        # ── 성과 테이블 ──────────────────────────────
         st.markdown("#### 전체 기간")
         st.dataframe(pd.DataFrame([
             perf_row(port["strategy_return"].dropna(), "LMI 전략"),
-            perf_row(bench_ret.dropna(),               "SPY/AGG 60/40"),
+            perf_row(bench_ret.dropna(),               "SPY/AGG 60/40")
         ]).set_index(""), use_container_width=True)
+
+        # ── 차트 2: 실제 포트폴리오 vs 벤치마크 (투자 시작일 기준) ──
+        st.divider()
+        st.subheader("실제 포트폴리오 vs 벤치마크 (투자 시작일 기준)")
+
+        bm_aligned   = bm.reindex(date_range, method='ffill')
+        bm_start_val = bm_aligned.iloc[0]
+        bm_rebased   = ((1 + bm_aligned) / (1 + bm_start_val) - 1) * 100
+
+        fig_compare = go.Figure()
+        fig_compare.add_trace(go.Scatter(
+            x=date_range, y=actual_cumret_series,
+            name="실제 포트폴리오", line=dict(color="#2ecc71", width=2.5)
+        ))
+        fig_compare.add_trace(go.Scatter(
+            x=date_range, y=bm_rebased,
+            name="SPY/AGG 60/40", line=dict(color="#ff7f0e", width=2, dash="dash")
+        ))
+        fig_compare.add_hline(y=0, line_dash="dot", line_color="gray", opacity=0.5)
+        fig_compare.update_layout(
+            yaxis_title="누적수익률 (%)", height=400,
+            hovermode="x unified", legend=dict(orientation="h", y=1.02)
+        )
+        st.plotly_chart(fig_compare, use_container_width=True)
+
+        # 성과 요약 메트릭
+        final_actual = actual_cumret_series.iloc[-1]
+        final_bm     = bm_rebased.iloc[-1]
+        days_held    = (date_range[-1] - date_range[0]).days
+
+        ca, cb, cc = st.columns(3)
+        ca.metric("실제 포트폴리오 수익률", f"{final_actual:+.2f}%")
+        cb.metric("SPY/AGG 60/40 수익률",   f"{final_bm:+.2f}%")
+        cc.metric("초과수익", f"{final_actual - final_bm:+.2f}%")
+        st.caption(f"비교 기간: {date_range[0].date()} ~ {datetime.today().date()}  ({days_held}일)")
 
     else:
         st.info("💡 거래 내역을 업로드하면 실제 포트폴리오 수익률을 볼 수 있습니다")
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=port.index, y=port["cumulative_return"]*100,
-                                 name="LMI 전략",      line=dict(color="#1f77b4", width=2)))
-        fig.add_trace(go.Scatter(x=bm.index,   y=bm*100,
+                                 name="LMI 전략", line=dict(color="#1f77b4", width=2)))
+        fig.add_trace(go.Scatter(x=bm.index, y=bm*100,
                                  name="SPY/AGG 60/40", line=dict(color="#ff7f0e", width=2)))
         fig.update_layout(yaxis_title="누적수익률 (%)", height=500,
                           hovermode="x unified", legend=dict(orientation="h", y=1.02))
@@ -432,62 +483,3 @@ with tab2:
             perf_row(port["strategy_return"].dropna(), "LMI 전략"),
             perf_row(bench_ret.dropna(),               "SPY/AGG 60/40"),
         ]).set_index(""), use_container_width=True)
-    # ── 실제 포트폴리오 vs 벤치마크 비교 차트 (별도) ──────────
-    st.divider()
-    st.subheader("실제 포트폴리오 vs 벤치마크 (투자 시작일 기준)")
-
-    if not trade_history.empty:
-        # 투자 시작일
-        start_date = trade_history['date'].min()
-
-        # 실제 포트폴리오 누적수익률 (시작일 기준 0에서 출발)
-        actual_cumret_series = pd.Series(actual_cumret, index=date_range)
-
-        # 벤치마크도 같은 시작일 기준으로 재조정 (시작일 = 0%)
-        bm_aligned = bm.reindex(date_range, method='ffill')
-        bm_start_val = bm_aligned.iloc[0] if not bm_aligned.empty else 0
-        bm_rebased = ((1 + bm_aligned) / (1 + bm_start_val) - 1) * 100
-
-        # SPY 단독도 추가
-        spy_bm = bm.reindex(date_range, method='ffill')
-        spy_rebased = ((1 + spy_bm) / (1 + spy_bm.iloc[0]) - 1) * 100
-
-        fig_compare = go.Figure()
-
-        fig_compare.add_trace(go.Scatter(
-            x=date_range, y=actual_cumret_series,
-            name="실제 포트폴리오",
-            line=dict(color="#2ecc71", width=2.5)
-        ))
-        fig_compare.add_trace(go.Scatter(
-            x=date_range, y=bm_rebased,
-            name="SPY/AGG 60/40",
-            line=dict(color="#ff7f0e", width=2, dash="dash")
-        ))
-
-        # 0선 표시
-        fig_compare.add_hline(y=0, line_dash="dot", line_color="gray", opacity=0.5)
-
-        fig_compare.update_layout(
-            yaxis_title="누적수익률 (%)",
-            height=400,
-            hovermode="x unified",
-            legend=dict(orientation="h", y=1.02),
-            xaxis_title="날짜"
-        )
-        st.plotly_chart(fig_compare, use_container_width=True)
-
-        # 간단 성과 요약
-        final_actual = actual_cumret_series.iloc[-1]
-        final_bm     = bm_rebased.iloc[-1]
-        days_held    = (date_range[-1] - date_range[0]).days
-
-        ca, cb, cc = st.columns(3)
-        ca.metric("실제 포트폴리오 수익률", f"{final_actual:+.2f}%")
-        cb.metric("SPY/AGG 60/40 수익률", f"{final_bm:+.2f}%")
-        cc.metric("초과수익", f"{final_actual - final_bm:+.2f}%",
-                delta_color="normal")
-        st.caption(f"비교 기간: {start_date.date()} ~ {datetime.today().date()}  ({days_held}일)")
-
-    else:
-        st.info("💡 거래 내역을 업로드하면 실제 포트폴리오와 벤치마크를 비교할 수 있습니다")
