@@ -35,19 +35,34 @@ with st.sidebar:
             "avg_cost_usd": [0.0] * 16,
             "asset_class":  ["stock"]*10 + ["bond"]*6
         })
+    
+    # 컬럼 없으면 추가 (기존 CSV 호환)
+    if "avg_cost_krw" not in holdings_df.columns:
+        holdings_df["avg_cost_krw"] = 0.0
+    if "buy_krw_rate" not in holdings_df.columns:
+        holdings_df["buy_krw_rate"] = 1350.0
 
     st.markdown("**보유 수량 & 평균단가 입력**")
     edited_df = st.data_editor(
         holdings_df,
         column_config={
-            "ticker":       st.column_config.TextColumn("Ticker", disabled=True),
-            "shares":       st.column_config.NumberColumn("수량", min_value=0.0, step=0.01, format="%.2f"),
-            "avg_cost_usd": st.column_config.NumberColumn("평균단가(USD)", min_value=0.0, step=0.01, format="%.2f"),
-            "asset_class":  st.column_config.SelectboxColumn("구분", options=["stock","bond"], disabled=True),
+            "ticker":        st.column_config.TextColumn("Ticker", disabled=True),
+            "shares":        st.column_config.NumberColumn("수량", min_value=0.0, step=0.01, format="%.2f"),
+            "avg_cost_krw":  st.column_config.NumberColumn("매수금액/주(KRW)", min_value=0.0, step=100.0, format="%.0f"),
+            "buy_krw_rate":  st.column_config.NumberColumn("매수 당시 환율", min_value=0.0, step=1.0, format="%.1f"),
+            "avg_cost_usd":  st.column_config.NumberColumn("평균단가(USD)", disabled=True, format="%.2f"),
+            "asset_class":   st.column_config.SelectboxColumn("구분", options=["stock","bond"], disabled=True),
         },
         hide_index=True,
         use_container_width=True,
     )
+
+    # avg_cost_usd 자동 계산
+    mask = (edited_df["avg_cost_krw"] > 0) & (edited_df["buy_krw_rate"] > 0)
+    edited_df.loc[mask, "avg_cost_usd"] = (
+        edited_df.loc[mask, "avg_cost_krw"] / edited_df.loc[mask, "buy_krw_rate"]
+    )
+
 
     col_save, _ = st.columns(2)
     if col_save.button("💾 저장", use_container_width=True):
