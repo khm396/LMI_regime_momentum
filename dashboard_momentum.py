@@ -351,8 +351,22 @@ with tab2:
                 "Sharpe": f"{sr:.2f}", "MDD": f"{mdd*100:.2f}%"}
 
     bench_ret = bm.diff().dropna()
-    rows = [
-        perf_row(port["strategy_return"].dropna(), "LMI 전략 (전체)"),
-        perf_row(bench_ret.dropna(), "SPY/AGG 60/40 (전체)"),
+
+    # 작년 9월부터 현재 슬라이싱
+    recent_start = "2025-09-01"
+    port_recent  = port.loc[recent_start:, "strategy_return"].dropna()
+    bench_recent = bench_ret.loc[recent_start:].dropna()
+
+    st.markdown("#### 전체 기간")
+    rows_all = [
+        perf_row(port["strategy_return"].dropna(), "LMI 전략"),
+        perf_row(bench_ret.dropna(), "SPY/AGG 60/40"),
     ]
-    st.dataframe(pd.DataFrame(rows).set_index(""), use_container_width=True)
+    st.dataframe(pd.DataFrame(rows_all).set_index(""), use_container_width=True)
+
+    st.markdown("#### 최근 성과 (2025-09 ~ 현재)")
+    rows_recent = [
+        perf_row(port_recent, "LMI 전략"),
+        perf_row(bench_recent, "SPY/AGG 60/40"),
+    ]
+    st.dataframe(pd.DataFrame(rows_recent).set_index(""), use_container_width=True)
