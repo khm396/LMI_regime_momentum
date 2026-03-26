@@ -11,8 +11,8 @@ from LMI_regime_momentum_strategy import (
     WeightAllocator, PortfolioSimulator, DV01Calculator
 )
 
-st.set_page_config(page_title="LMI Dashboard", page_icon="📊", layout="wide")
-st.title("📊 LMI Regime Momentum Dashboard")
+st.set_page_config(page_title="LMI Dashboard", layout="wide")
+st.title("LMI Regime Momentum Dashboard")
 st.caption(f"Last updated: {datetime.today().strftime('%Y-%m-%d %H:%M KST')}")
 STOCK_TICKERS = ["XLK","XLF","XLV","XLY","XLP","XLI","XLE","XLB","XLU","XLC"]
 BOND_TICKERS  = ["TLT","IEF","SHY","TIP","LQD","HYG"]
@@ -23,7 +23,7 @@ HOLDINGS_FILE = "portfolio_holdings.csv"
 # 포트폴리오 Holdings 로드/편집 (사이드바)
 # ══════════════════════════════════════════════
 with st.sidebar:
-    st.header("📂 포트폴리오 관리")
+    st.header("포트폴리오 관리")
     st.caption("리밸런싱 후 수량/평균단가를 업데이트하세요")
 
     # CSV 파일 있으면 로드, 없으면 빈 템플릿
@@ -207,7 +207,7 @@ total_pnl  = portfolio["unrealized_pnl_usd"].sum()
 # ══════════════════════════════════════════════
 # 탭
 # ══════════════════════════════════════════════
-tab1, tab2, tab3 = st.tabs(["🏠 운용현황", "📈 벤치마크 트래킹", "🧩 ETF 유니버스"])
+tab1, tab2 = st.tabs(["운용현황", "벤치마크 트래킹"])
 
 # ── TAB 1 ──────────────────────────────────────
 with tab1:
@@ -217,10 +217,10 @@ with tab1:
     c2.metric("총 평가금액 (USD)", f"${total_usd:,.0f}")
     c3.metric("미실현 손익 (USD)", f"${total_pnl:+,.0f}")
     c4.metric("리밸런싱", str(rebal_date))
-    st.caption(f"📅 최근 리밸런싱: {rebal_date}  |  가격 기준: 실시간 (5분 캐시)")
+    st.caption(f"최근 리밸런싱: {rebal_date}  |  가격 기준: 실시간 (5분 캐시)")
     st.divider()
 
-    st.subheader("📋 현재 포트폴리오 상세")
+    st.subheader("현재 포트폴리오 상세")
     disp = portfolio[[
         "asset_class","shares","avg_cost_usd","current_price_usd",
         "market_value_usd",
@@ -239,7 +239,7 @@ with tab1:
     )
     st.divider()
 
-    st.subheader("🎯 실제 비중 vs 전략 목표 비중")
+    st.subheader("실제 비중 vs 전략 목표 비중")
     target_sw  = strat["stock_weights"].drop(columns=["stock_weight_change"]).iloc[-1] * 100
     target_bw  = strat["bond_weights"].drop(columns=["bond_weight_change"]).iloc[-1] * 100
     target_all = pd.concat([target_sw, target_bw]).rename("목표비중(%)")
@@ -257,7 +257,7 @@ with tab1:
 
 # ── TAB 2 ──────────────────────────────────────
 with tab2:
-    st.subheader("📈 누적수익률: 전략 vs SPY/AGG 60/40")
+    st.subheader("누적수익률: 전략 vs SPY/AGG 60/40")
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -291,41 +291,4 @@ with tab2:
         perf_row(bench_ret.dropna(), "SPY/AGG 60/40 (전체)"),
     ]
     st.dataframe(pd.DataFrame(rows).set_index(""), use_container_width=True)
-
-
-# ── TAB 3 ──────────────────────────────────────
-with tab3:
-    st.subheader("🧩 투자 유니버스 ETF 현황")
-    c1, c2 = st.columns(2)
-
-    with c1:
-        st.markdown("#### 📦 주식 ETF")
-        sw_latest = strat["stock_weights"].drop(columns=["stock_weight_change"]).iloc[-1]
-        rows = [{"Ticker": t, "현재가": live_prices.get(t), "목표비중(%)": round(sw_latest.get(t,0)*100, 2)}
-                for t in STOCK_TICKERS]
-        st.dataframe(
-            pd.DataFrame(rows).set_index("Ticker")
-              .style.format({"현재가": "${:.2f}", "목표비중(%)": "{:.2f}%"}),
-            use_container_width=True
-        )
-
-    with c2:
-        st.markdown("#### 🏦 채권 ETF + DV01")
-        bw_latest = strat["bond_weights"].drop(columns=["bond_weight_change"]).iloc[-1]
-        rows = []
-        for t in BOND_TICKERS:
-            rows.append({
-                "Ticker":         t,
-                "현재가":          live_prices.get(t),
-                "목표비중(%)":     round(bw_latest.get(t, 0)*100, 2),
-                "Mod. Duration":  dv01_result.loc[t, "Modified Duration"] if t in dv01_result.index else None,
-                "DV01":           dv01_result.loc[t, "DV01"] if t in dv01_result.index else None,
-            })
-        st.dataframe(
-            pd.DataFrame(rows).set_index("Ticker")
-              .style.format({"현재가":"${:.2f}", "목표비중(%)":"{:.2f}%",
-                             "Mod. Duration":"{:.2f}", "DV01":"{:.4f}"}),
-            use_container_width=True
-        )
-
-        
+    
