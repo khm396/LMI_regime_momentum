@@ -405,8 +405,6 @@ with tab2:
                                  name="LMI 전략",       line=dict(color="#1f77b4", width=2)))
         fig.add_trace(go.Scatter(x=bm.index,    y=bm*100,
                                  name="SPY/AGG 60/40",  line=dict(color="#ff7f0e", width=2)))
-        fig.add_trace(go.Scatter(x=date_range,  y=actual_cumret,
-                                 name="실제 포트폴리오", line=dict(color="#2ecc71", width=2, dash="dash")))
         fig.update_layout(yaxis_title="누적수익률 (%)", height=500,
                           hovermode="x unified", legend=dict(orientation="h", y=1.02))
         st.plotly_chart(fig, use_container_width=True)
@@ -415,14 +413,6 @@ with tab2:
         st.dataframe(pd.DataFrame([
             perf_row(port["strategy_return"].dropna(), "LMI 전략"),
             perf_row(bench_ret.dropna(),               "SPY/AGG 60/40"),
-            perf_row(actual_ret_series.dropna(),       "실제 포트폴리오"),
-        ]).set_index(""), use_container_width=True)
-
-        st.markdown("#### 최근 성과 (2025-09 ~ 현재)")
-        st.dataframe(pd.DataFrame([
-            perf_row(port.loc[recent_start:, "strategy_return"].dropna(), "LMI 전략"),
-            perf_row(bench_ret.loc[recent_start:].dropna(),               "SPY/AGG 60/40"),
-            perf_row(actual_ret_series.loc[recent_start:].dropna(),       "실제 포트폴리오"),
         ]).set_index(""), use_container_width=True)
 
     else:
@@ -442,9 +432,62 @@ with tab2:
             perf_row(port["strategy_return"].dropna(), "LMI 전략"),
             perf_row(bench_ret.dropna(),               "SPY/AGG 60/40"),
         ]).set_index(""), use_container_width=True)
+    # ── 실제 포트폴리오 vs 벤치마크 비교 차트 (별도) ──────────
+    st.divider()
+    st.subheader("실제 포트폴리오 vs 벤치마크 (투자 시작일 기준)")
 
-        st.markdown("#### 최근 성과 (2025-09 ~ 현재)")
-        st.dataframe(pd.DataFrame([
-            perf_row(port.loc[recent_start:, "strategy_return"].dropna(), "LMI 전략"),
-            perf_row(bench_ret.loc[recent_start:].dropna(),               "SPY/AGG 60/40"),
-        ]).set_index(""), use_container_width=True)
+    if not trade_history.empty:
+        # 투자 시작일
+        start_date = trade_history['date'].min()
+
+        # 실제 포트폴리오 누적수익률 (시작일 기준 0에서 출발)
+        actual_cumret_series = pd.Series(actual_cumret, index=date_range)
+
+        # 벤치마크도 같은 시작일 기준으로 재조정 (시작일 = 0%)
+        bm_aligned = bm.reindex(date_range, method='ffill')
+        bm_start_val = bm_aligned.iloc[0] if not bm_aligned.empty else 0
+        bm_rebased = ((1 + bm_aligned) / (1 + bm_start_val) - 1) * 100
+
+        # SPY 단독도 추가
+        spy_bm = bm.reindex(date_range, method='ffill')
+        spy_rebased = ((1 + spy_bm) / (1 + spy_bm.iloc[0]) - 1) * 100
+
+        fig_compare = go.Figure()
+
+        fig_compare.add_trace(go.Scatter(
+            x=date_range, y=actual_cumret_series,
+            name="실제 포트폴리오",
+            line=dict(color="#2ecc71", width=2.5)
+        ))
+        fig_compare.add_trace(go.Scatter(
+            x=date_range, y=bm_rebased,
+            name="SPY/AGG 60/40",
+            line=dict(color="#ff7f0e", width=2, dash="dash")
+        ))
+
+        # 0선 표시
+        fig_compare.add_hline(y=0, line_dash="dot", line_color="gray", opacity=0.5)
+
+        fig_compare.update_layout(
+            yaxis_title="누적수익률 (%)",
+            height=400,
+            hovermode="x unified",
+            legend=dict(orientation="h", y=1.02),
+            xaxis_title="날짜"
+        )
+        st.plotly_chart(fig_compare, use_container_width=True)
+
+        # 간단 성과 요약
+        final_actual = actual_cumret_series.iloc[-1]
+        final_bm     = bm_rebased.iloc[-1]
+        days_held    = (date_range[-1] - date_range[0]).days
+
+        ca, cb, cc = st.columns(3)
+        ca.metric("실제 포트폴리오 수익률", f"{final_actual:+.2f}%")
+        cb.metric("SPY/AGG 60/40 수익률", f"{final_bm:+.2f}%")
+        cc.metric("초과수익", f"{final_actual - final_bm:+.2f}%",
+                delta_color="normal")
+        st.caption(f"비교 기간: {start_date.date()} ~ {datetime.today().date()}  ({days_held}일)")
+
+    else:
+        st.info("💡 거래 내역을 업로드하면 실제 포트폴리오와 벤치마크를 비교할 수 있습니다")
