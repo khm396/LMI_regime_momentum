@@ -365,7 +365,6 @@ with tab2:
     bench_ret    = bm.diff().dropna()
     recent_start = "2025-09-01"
 
-    # ── 역사적 가격 조회 ──────────────────────────
     @st.cache_data(ttl=3600)
     def get_historical_prices(tickers: tuple, start: str) -> pd.DataFrame:
         df = yf.download(list(tickers), start=start, progress=False, auto_adjust=True)
@@ -380,8 +379,9 @@ with tab2:
             trade_history['date'].min().strftime("%Y-%m-%d")
         )
 
-        # 날짜별 보유수량 시계열 계산
         date_range = pd.date_range(trade_history['date'].min(), datetime.today(), freq='D')
+
+        # ── 날짜별 보유수량 시계열 ──────────────────
         holdings_ts = {}
         for ticker in all_tickers:
             trades_t = trade_history[trade_history['ticker'] == ticker]
@@ -391,34 +391,55 @@ with tab2:
                 day_trades = trades_t[trades_t['date'].dt.date == date.date()]
                 for _, t in day_trades.iterrows():
                     qty += t['shares'] if t['action'] == 'BUY' else -t['shares']
-                daily_qty[date] = qty
+                daily_qty[date] = max(qty, 0)
             holdings_ts[ticker] = pd.Series(daily_qty)
 
-        holdings_df_ts = pd.DataFrame(holdings_ts).fillna(0)
-
-        # 날짜별 시장가치 = 보유수량 × 당일 가격
-        aligned_prices = hist_prices.reindex(date_range, method='ffill').fillna(0)
+        holdings_df_ts   = pd.DataFrame(holdings_ts).fillna(0)
+        aligned_prices   = hist_prices.reindex(date_range, method='ffill').fillna(0)
         portfolio_series = (holdings_df_ts * aligned_prices).sum(axis=1)
 
-        # 누적 cost basis
-        # 누적 매수금액 & 매도 회수금액 분리 추적
-        cost_series  = pd.Series(0.0, index=date_range)
-        cash_out     = pd.Series(0.0, index=date_range)
+        # ── FIFO 평균단가 기반 실현손익 추적 ──────────
+        avg_cost_dict  = {}
+        holdings_qty   = {}
+        realized_pnl_series = pd.Series(0.0, index=date_range)
 
-        for _, trade in trade_history.iterrows():
-            amount = trade['shares'] * trade['price_usd']
+        for _, trade in trade_history.sort_values('date').iterrows():
+            t      = trade['ticker']
+            shares = trade['shares']
+            price  = trade['price_usd']
+            date   = trade['date']
+
+            if t not in avg_cost_dict:
+                avg_cost_dict[t] = 0.0
+                holdings_qty[t]  = 0.0
+
             if trade['action'] == 'BUY':
-                cost_series.loc[trade['date']:] += amount
+                total_qty        = holdings_qty[t] + shares
+                avg_cost_dict[t] = (avg_cost_dict[t] * holdings_qty[t] + price * shares) / total_qty
+                holdings_qty[t]  = total_qty
             else:
-                cash_out.loc[trade['date']:] += amount
+                realized         = (price - avg_cost_dict[t]) * shares
+                realized_pnl_series.loc[date:] += realized
+                holdings_qty[t]  = max(holdings_qty[t] - shares, 0)
 
-        # 실현 + 미실현 손익
-        # actual_pnl = 현재 시장가치 + 회수금액 - 총매수금액
-        actual_pnl        = portfolio_series + cash_out - cost_series
-        actual_cumret     = np.where(cost_series > 0, actual_pnl / cost_series * 100, 0)
-        actual_ret_series = (actual_pnl / cost_series).fillna(0).replace([np.inf, -np.inf], 0)
+        # ── 현재 보유 매수원가 (스칼라) ───────────────
+        current_cost_basis = sum(
+            avg_cost_dict.get(t, 0) * holdings_qty.get(t, 0)
+            for t in holdings_qty
+        )
+
+        # ── 총 투입원가 시계열 (분모) ──────────────────
+        total_invested = pd.Series(0.0, index=date_range)
+        for _, trade in trade_history.sort_values('date').iterrows():
+            if trade['action'] == 'BUY':
+                total_invested.loc[trade['date']:] += trade['shares'] * trade['price_usd']
+
+        # ── 손익 계산 ──────────────────────────────────
+        unrealized_pnl       = portfolio_series - current_cost_basis
+        actual_pnl           = unrealized_pnl + realized_pnl_series
+        actual_cumret        = np.where(total_invested > 0, actual_pnl / total_invested * 100, 0)
+        actual_ret_series    = (actual_pnl / total_invested).fillna(0).replace([np.inf, -np.inf], 0)
         actual_cumret_series = pd.Series(actual_cumret, index=date_range)
-
 
         # ── 차트 1: 전략 vs 벤치마크 ──────────
         fig = go.Figure()
@@ -426,18 +447,19 @@ with tab2:
                                  name="LMI 전략", line=dict(color="#1f77b4", width=2)))
         fig.add_trace(go.Scatter(x=bm.index, y=bm*100,
                                  name="SPY/AGG 60/40", line=dict(color="#ff7f0e", width=2)))
+
         fig.update_layout(yaxis_title="누적수익률 (%)", height=500,
                           hovermode="x unified", legend=dict(orientation="h", y=1.02))
         st.plotly_chart(fig, use_container_width=True)
 
-        # ── 성과 테이블 ──────────────────────────────
+        # ── 성과 테이블 ────────────────────────────────
         st.markdown("#### 전체 기간")
         st.dataframe(pd.DataFrame([
             perf_row(port["strategy_return"].dropna(), "LMI 전략"),
             perf_row(bench_ret.dropna(),               "SPY/AGG 60/40")
         ]).set_index(""), use_container_width=True)
 
-        # ── 차트 2: 실제 포트폴리오 vs 벤치마크 (투자 시작일 기준) ──
+        # ── 차트 2: 실제 포트폴리오 vs 벤치마크 ──────
         st.divider()
         st.subheader("실제 포트폴리오 vs 벤치마크 (투자 시작일 기준)")
 
@@ -461,7 +483,6 @@ with tab2:
         )
         st.plotly_chart(fig_compare, use_container_width=True)
 
-        # 성과 요약 메트릭
         final_actual = actual_cumret_series.iloc[-1]
         final_bm     = bm_rebased.iloc[-1]
         days_held    = (date_range[-1] - date_range[0]).days
