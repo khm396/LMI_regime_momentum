@@ -401,18 +401,24 @@ with tab2:
         portfolio_series = (holdings_df_ts * aligned_prices).sum(axis=1)
 
         # 누적 cost basis
-        cost_series = pd.Series(0.0, index=date_range)
+        # 누적 매수금액 & 매도 회수금액 분리 추적
+        cost_series  = pd.Series(0.0, index=date_range)
+        cash_out     = pd.Series(0.0, index=date_range)
+
         for _, trade in trade_history.iterrows():
             amount = trade['shares'] * trade['price_usd']
             if trade['action'] == 'BUY':
                 cost_series.loc[trade['date']:] += amount
             else:
-                cost_series.loc[trade['date']:] -= amount
+                cash_out.loc[trade['date']:] += amount
 
-        actual_pnl        = portfolio_series - cost_series
+        # 실현 + 미실현 손익
+        # actual_pnl = 현재 시장가치 + 회수금액 - 총매수금액
+        actual_pnl        = portfolio_series + cash_out - cost_series
         actual_cumret     = np.where(cost_series > 0, actual_pnl / cost_series * 100, 0)
         actual_ret_series = (actual_pnl / cost_series).fillna(0).replace([np.inf, -np.inf], 0)
         actual_cumret_series = pd.Series(actual_cumret, index=date_range)
+
 
         # ── 차트 1: 전략 vs 벤치마크 ──────────
         fig = go.Figure()
