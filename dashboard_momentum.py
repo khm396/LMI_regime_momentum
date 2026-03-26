@@ -72,6 +72,35 @@ with st.sidebar:
 
     st.divider()
 
+    # ── 사이드바에 추가 (리밸런싱 날짜 위에) ────────────────
+
+    st.divider()
+    st.markdown("**거래 내역 관리**")
+
+    # 거래 내역 파일 업로드
+    uploaded_file = st.file_uploader("Bithumb 거래내역 업로드 (XLS)", type=["xls", "xlsx"])
+
+    trade_history = pd.DataFrame()
+    if uploaded_file is not None:
+        try:
+            raw_trades = pd.read_excel(uploaded_file)
+            # 완료된 거래만 필터링
+            completed = raw_trades[raw_trades['상태'] == '완료'].copy()
+            completed = completed[completed['체결수량'] > 0].copy()
+            
+            trade_history = pd.DataFrame({
+                'date': pd.to_datetime(completed['주문일자']),
+                'ticker': completed['종목코드'],
+                'action': completed['매매구분'].apply(lambda x: 'BUY' if '매수' in x else 'SELL'),
+                'shares': completed['체결수량'],
+                'price_usd': completed['체결가격'],
+            }).sort_values('date').reset_index(drop=True)
+            
+            st.success(f"✅ {len(trade_history)}건의 거래 로드됨")
+            st.write(f"기간: {trade_history['date'].min().date()} ~ {trade_history['date'].max().date()}")
+        except Exception as e:
+            st.error(f"파일 읽기 오류: {e}")
+
     # ── 환율 입력 ──────────────────────────────
     st.markdown("**환율 설정**")
     krw_rate = st.number_input(
@@ -320,27 +349,11 @@ with tab1:
     st.plotly_chart(fig_w, use_container_width=True)
     st.dataframe(compare_df.style.format("{:.2f}%"), use_container_width=True)
 
-
-# ── TAB 2 ──────────────────────────────────────
+#TAB 2
 with tab2:
-    st.subheader("누적수익률: 전략 vs SPY/AGG 60/40")
+    st.subheader("누적수익률: 전략 vs SPY/AGG 60/40 vs 실제 포트폴리오")
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=port.index, y=port["cumulative_return"]*100,
-        name="LMI 전략", line=dict(color="#1f77b4", width=2)
-    ))
-    fig.add_trace(go.Scatter(
-        x=bm.index, y=bm*100,
-        name="SPY/AGG 60/40", line=dict(color="#ff7f0e", width=2)
-    ))
-    fig.update_layout(
-        yaxis_title="누적수익률 (%)", height=500,
-        hovermode="x unified",
-        legend=dict(orientation="h", y=1.02)
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
+    # perf_row 정의를 맨 위로
     def perf_row(series, label):
         years = len(series) / 12
         cagr  = (1 + series).prod() ** (1/years) - 1
@@ -350,23 +363,88 @@ with tab2:
         return {"": label, "CAGR": f"{cagr*100:.2f}%", "연변동성": f"{vol*100:.2f}%",
                 "Sharpe": f"{sr:.2f}", "MDD": f"{mdd*100:.2f}%"}
 
-    bench_ret = bm.diff().dropna()
-
-    # 작년 9월부터 현재 슬라이싱
+    bench_ret    = bm.diff().dropna()
     recent_start = "2025-09-01"
-    port_recent  = port.loc[recent_start:, "strategy_return"].dropna()
-    bench_recent = bench_ret.loc[recent_start:].dropna()
 
-    st.markdown("#### 전체 기간")
-    rows_all = [
-        perf_row(port["strategy_return"].dropna(), "LMI 전략"),
-        perf_row(bench_ret.dropna(), "SPY/AGG 60/40"),
-    ]
-    st.dataframe(pd.DataFrame(rows_all).set_index(""), use_container_width=True)
+    if not trade_history.empty:
+        def calculate_portfolio_value(trades_df, live_prices_dict, current_date):
+            holdings   = {}
+            cost_basis = 0
+            for _, trade in trades_df[trades_df['date'] <= current_date].iterrows():
+                ticker = trade['ticker']
+                if ticker not in holdings:
+                    holdings[ticker] = 0
+                if trade['action'] == 'BUY':
+                    holdings[ticker] += trade['shares']
+                    cost_basis       += trade['shares'] * trade['price_usd']
+                else:
+                    holdings[ticker] -= trade['shares']
+                    cost_basis       -= trade['shares'] * trade['price_usd']
+            market_value = sum(
+                holdings[t] * live_prices_dict.get(t, 0)
+                for t in holdings if holdings[t] > 0
+            )
+            return market_value, cost_basis
 
-    st.markdown("#### 최근 성과 (2025-09 ~ 현재)")
-    rows_recent = [
-        perf_row(port_recent, "LMI 전략"),
-        perf_row(bench_recent, "SPY/AGG 60/40"),
-    ]
-    st.dataframe(pd.DataFrame(rows_recent).set_index(""), use_container_width=True)
+        date_range       = pd.date_range(start=trade_history['date'].min(), end=datetime.today(), freq='D')
+        portfolio_values = []
+        portfolio_costs  = []
+        for date in date_range:
+            mkt_val, cost = calculate_portfolio_value(trade_history, live_prices, date)
+            portfolio_values.append(mkt_val)
+            portfolio_costs.append(cost)
+
+        portfolio_series = pd.Series(portfolio_values, index=date_range)
+        cost_series      = pd.Series(portfolio_costs,  index=date_range)
+        actual_pnl       = portfolio_series - cost_series
+        actual_cumret    = np.where(cost_series > 0, actual_pnl / cost_series * 100, 0)
+        actual_ret_series = (actual_pnl / cost_series).fillna(0).replace([np.inf, -np.inf], 0)
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=port.index,  y=port["cumulative_return"]*100,
+                                 name="LMI 전략",       line=dict(color="#1f77b4", width=2)))
+        fig.add_trace(go.Scatter(x=bm.index,    y=bm*100,
+                                 name="SPY/AGG 60/40",  line=dict(color="#ff7f0e", width=2)))
+        fig.add_trace(go.Scatter(x=date_range,  y=actual_cumret,
+                                 name="실제 포트폴리오", line=dict(color="#2ecc71", width=2, dash="dash")))
+        fig.update_layout(yaxis_title="누적수익률 (%)", height=500,
+                          hovermode="x unified", legend=dict(orientation="h", y=1.02))
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("#### 전체 기간")
+        st.dataframe(pd.DataFrame([
+            perf_row(port["strategy_return"].dropna(), "LMI 전략"),
+            perf_row(bench_ret.dropna(),               "SPY/AGG 60/40"),
+            perf_row(actual_ret_series.dropna(),       "실제 포트폴리오"),
+        ]).set_index(""), use_container_width=True)
+
+        st.markdown("#### 최근 성과 (2025-09 ~ 현재)")
+        st.dataframe(pd.DataFrame([
+            perf_row(port.loc[recent_start:, "strategy_return"].dropna(), "LMI 전략"),
+            perf_row(bench_ret.loc[recent_start:].dropna(),               "SPY/AGG 60/40"),
+            perf_row(actual_ret_series.loc[recent_start:].dropna(),       "실제 포트폴리오"),
+        ]).set_index(""), use_container_width=True)
+
+    else:
+        st.info("💡 거래 내역을 업로드하면 실제 포트폴리오 수익률을 볼 수 있습니다")
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=port.index, y=port["cumulative_return"]*100,
+                                 name="LMI 전략",      line=dict(color="#1f77b4", width=2)))
+        fig.add_trace(go.Scatter(x=bm.index,   y=bm*100,
+                                 name="SPY/AGG 60/40", line=dict(color="#ff7f0e", width=2)))
+        fig.update_layout(yaxis_title="누적수익률 (%)", height=500,
+                          hovermode="x unified", legend=dict(orientation="h", y=1.02))
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("#### 전체 기간")
+        st.dataframe(pd.DataFrame([
+            perf_row(port["strategy_return"].dropna(), "LMI 전략"),
+            perf_row(bench_ret.dropna(),               "SPY/AGG 60/40"),
+        ]).set_index(""), use_container_width=True)
+
+        st.markdown("#### 최근 성과 (2025-09 ~ 현재)")
+        st.dataframe(pd.DataFrame([
+            perf_row(port.loc[recent_start:, "strategy_return"].dropna(), "LMI 전략"),
+            perf_row(bench_ret.loc[recent_start:].dropna(),               "SPY/AGG 60/40"),
+        ]).set_index(""), use_container_width=True)
